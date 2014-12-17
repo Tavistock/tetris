@@ -2,76 +2,21 @@
   (:require [om.core :as om :include-macros true]
             [om.dom :as dom :include-macros true]
             [cljs.core.async :refer [close! put! chan <! timeout unique alts!]]
-            [tetris.game.board :as board])
+            [tetris.game.board :as board :refer [any-filled-row?
+                                                 filled-rows
+                                                 get-rand-piece
+                                                 get-drop-pos
+                                                 rotate-piece
+                                                 empty-board
+                                                 piece-fits?
+                                                 coord-piece
+                                                 empty-row
+                                                 collapse-rows]]
+            [tetris.game.state :refer [game-state]]
+            [tetris.game.paint :refer [tetris-board value-piece write-piece highlight-rows]]
+            )
   (:require-macros
     [cljs.core.async.macros :refer [go go-loop alt!]]))
-
-(def rows 20)
-(def cols 10)
-(def empty-row (vec (repeat cols 0)))
-(def empty-board (vec (repeat rows empty-row)))
-
-(def coord-piece
-  {:I [ [-1  0] [ 0  0] [ 1  0] [ 2  0] ]
-   :T [ [ 0 -1] [-1  0] [ 0  0] [ 1  0] ]
-   :O [ [ 0 -1] [ 1 -1] [ 0  0] [ 1  0] ]
-   :J [ [-1 -1] [-1  0] [ 0  0] [ 1  0] ]
-   :L [ [ 1 -1] [-1  0] [ 0  0] [ 1  0] ]
-   :S [ [ 0 -1] [ 1 -1] [-1  0] [ 0  0] ]
-   :Z [ [-1 -1] [ 0 -1] [ 0  0] [ 1  0] ]})
-
-(defonce app-state (atom {:board empty-board
-                          :piece {:coord (coord-piece :J) :type :J}
-                          :position [4 6]}))
-
-(def value-piece
-  "An ordering imposed on the possible cell types, used for tilemap position."
-  { 0 0
-   :I 1
-   :L 2
-   :J 3
-   :S 4
-   :Z 5
-   :O 6
-   :T 7
-   :G 8  ; ghost piece
-   :H 9  ; highlighted (filled or about to collapse)
-   })
-
-(defn rotate-coord [[x y]]
-  [ (- y) x ])
-
-(defn rotate-piece [piece]
-  (mapv rotate-coord piece))
-
-(defn piece-fits?
-  [board piece [cx cy]]
-  (every?
-    (fn [[x y]]
-      (zero? (get-in board [(+ y cy) (+ x cx)])))
-    piece))
-
-(defn write-piece
-  [board coords [cx cy] value]
-  (if-let [[x y] (first coords)]
-    (recur (assoc-in board [(+ y cy) (+ x cx)] value)
-           (rest coords)
-           [cx cy]
-           value)
-    board))
-
-(defn get-drop-pos
-  [board piece [x y]]
-  (let [clear? #(piece-fits? board piece [x %])
-        cy (first (remove clear? (iterate inc y)))]
-    (max y (dec cy))))
-
-(defn create-drawable-board
-  [board piece [x y]]
-  (let [gy     (get-drop-pos board  (:coord piece) [x y])
-        board1 (write-piece  board  (:coord piece) [x gy] "G")
-        board2 (write-piece  board1 (:coord piece) [x y] (value-piece (:type piece)))]
-    board2))
 
 ; ::::::::::::::::::::::::::::::::::::::::::::::
 ; Piece Control
@@ -87,11 +32,11 @@
   "Shifts a piece in the given direction until given channel is closed."
   [stop-chan dx]
   (go-loop []
-    (try-move! dx 0)
-    (let [time- (timeout 300)
-          [value c] (alts! [stop-chan time-])]
-      (when (= c time-)
-        (recur)))))
+           (try-move! dx 0)
+           (let [time- (timeout 300)
+                 [value c] (alts! [stop-chan time-])]
+             (when (= c time-)
+               (recur)))))
 
 (defn go-go-control-piece-shift!
   "Monitors the given shift-chan to control piece-shifting."
@@ -111,22 +56,30 @@
 (defn try-move!
   "Try moving the current piece to the given offset."
   [dx dy]
-  (when-let [piece (:coord (:piece @app-state))]
-    (let [[x y] (:position @app-state)
-          board (:board @app-state)
-          nx (+ dx x)
-          ny (+ dy y)]
+  (when-let [piece (:coord (:piece @game-state))]
+    (let [[x y] (:position @game-state)
+          board (:board @game-state)
+          nx    (+ dx x)
+          ny    (+ dy y)]
       (if (piece-fits? board piece [nx ny])
-        (swap! app-state assoc :position [nx ny])))))
+        (swap! game-state assoc :position [nx ny])))))
 
 (defn try-rotate!
   []
-  (when-let [piece (:coord (:piece @app-state))]
-    (let [pos (:position @app-state)
-          board (:board @app-state)
+  (when-let [piece (:coord (:piece @game-state))]
+    (let [pos       (:position @game-state)
+          board     (:board @game-state)
           new-piece (rotate-piece piece)]
       (if (piece-fits? board new-piece pos)
-        (swap! app-state assoc-in [:piece :coord] new-piece)))))
+        (swap! game-state assoc-in [:piece :coord] new-piece)))))
+
+(defn do-drop!
+  []
+  (let [[x y] (:position @game-state)
+        board (:board @game-state)
+        piece (:piece @game-state)
+        ny    (get-drop-pos board (:coord piece) [x y])]
+    (swap! game-state assoc :position [x ny])))
 
 ; ::::::::::::::::::::::::::::::::::::::::::::::
 ; Controls
@@ -157,7 +110,7 @@
                      :down  (put! move-down-chan true)
                      :left  (put! move-left-chan true)
                      :right (put! move-right-chan true)
-                     ; :space (hard-drop!)
+                     :space (do-drop!)
                      :up    (try-rotate!)
                      nil)
                    (when (#{:down :left :right :space :up} (key-name e))
@@ -167,7 +120,6 @@
                    :down  (put! move-down-chan false)
                    :left  (put! move-left-chan false)
                    :right (put! move-right-chan false)
-                   ; :space (hard-drop!)
                    ;:shift (toggle-record!)
                    nil))]
     
@@ -176,29 +128,112 @@
     (.addEventListener js/window "keyup" key-up)))
 
 ; ::::::::::::::::::::::::::::::::::::::::::::::
+; Game Controlled State Change
+; ::::::::::::::::::::::::::::::::::::::::::::::
+
+(def stop-grav (chan))
+(defn stop-gravity! [] (put! stop-grav 0))
+
+(declare go-gravity!)
+
+(defn remove-rows! []
+  (let [board (:board @game-state)
+        rows (->> board
+                  (filled-rows)
+                  (map-indexed vector)
+                  (filter #(true? (second %)))
+                  (map first))
+        collapsed   (collapse-rows rows board)
+        highlighted (highlight-rows rows board)]
+    (go ; no need to exit this (just let it finish)
+        ; blink n times
+        (doseq [i (range 3)]
+          (swap! game-state assoc :board highlighted)
+          (<! (timeout 170))
+          (swap! game-state assoc :board board)
+          (<! (timeout 170)))
+        
+        ; clear rows to create a gap, and pause
+        (swap! game-state assoc :board highlighted)
+        (<! (timeout 220))
+        
+        ; finally collapse
+        (swap! game-state assoc :board collapsed)))
+  (try-new-piece!))
+
+(defn try-new-piece!
+  []
+  (let [piece (get-rand-piece)
+        start-pos [4 1]
+        board (:board @game-state)]
+    (if (piece-fits? board (:coord piece) start-pos)
+      (do (swap! game-state assoc
+                 :piece (:next @game-state)
+                 :next piece
+                 :position start-pos)
+        (go-gravity!))
+      (js/console.log "shit")))); game-over
+
+(defn lock-piece!
+  []
+  (let [piece (:piece @game-state)
+        pos (:position @game-state)
+        board (:board @game-state)
+        new-board (write-piece board (:coord piece) pos (value-piece (:type piece)))]
+    (swap! game-state assoc :board new-board)
+    (stop-gravity!)
+    (if (any-filled-row? new-board);  add conditions for line clear
+      (remove-rows!)
+      (try-new-piece!))))
+
+(defn apply-gravity!
+  []
+  (let [coord (get-in @game-state [:piece :coord])
+        [x y] (:position @game-state)
+        board (:board @game-state)
+        ny (inc y)]
+    (if (piece-fits? board coord [x ny])
+      (swap! game-state assoc-in [:position 1] ny)
+      (lock-piece!))))
+
+(defn go-gravity!
+  []
+  (go-loop []
+           (let [speed 400
+                 [_ c] (alts! [(timeout speed) stop-grav])]
+             (when-not (= c stop-grav)
+               (apply-gravity!)
+               (recur)))))
+
+
+; ::::::::::::::::::::::::::::::::::::::::::::::
 ; Om Rendering
 ; ::::::::::::::::::::::::::::::::::::::::::::::
+
 (defn main []
   (om/root
     tetris-board
-    app-state
+    game-state
     {:target (. js/document (getElementById "app"))}))
 
-(defn tetris-board [app owner]
-      (reify
-        om/IRender
-        (render [_]
-                (apply dom/ul
-                       nil 
-                       (om/build-all row (create-drawable-board (:board app) (:piece app) (:position app)))))))
+; (defn tetris-board [data owner]
+;       (reify
+;         om/IRender
+;         (render [_]
+;                 (apply dom/ul
+;                        nil 
+;                        (om/build-all row (create-drawable-board 
+;                                            (:board data)
+;                                            (:piece data)
+;                                            (:position data)))))))
 
-(defn row [data owner]
-  (reify
-    om/IRender
-    (render [_]
-            (dom/li
-              nil 
-              (clj->js data)))))
+; (defn row [data owner]
+;   (reify
+;     om/IRender
+;     (render [_]
+;             (dom/li
+;               nil 
+;               (clj->js data)))))
 
 (add-key-events)
 (go-go-control-piece-shift! move-left-chan -1)
