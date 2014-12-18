@@ -11,9 +11,16 @@
                                                  piece-fits?
                                                  coord-piece
                                                  empty-row
-                                                 collapse-rows]]
+                                                 collapse-rows
+                                                 cols
+                                                 rows]]
             [tetris.game.state :refer [game-state]]
-            [tetris.game.paint :refer [tetris-board value-piece write-piece highlight-rows]]
+            [tetris.game.paint :refer [value-piece
+                                       write-piece
+                                       highlight-rows
+                                       clear-rows
+                                       draw-board!
+                                       cell-size]]
             )
   (:require-macros
     [cljs.core.async.macros :refer [go go-loop alt!]]))
@@ -136,31 +143,6 @@
 
 (declare go-gravity!)
 
-(defn remove-rows! []
-  (let [board (:board @game-state)
-        rows (->> board
-                  (filled-rows)
-                  (map-indexed vector)
-                  (filter #(true? (second %)))
-                  (map first))
-        collapsed   (collapse-rows rows board)
-        highlighted (highlight-rows rows board)]
-    (go ; no need to exit this (just let it finish)
-        ; blink n times
-        (doseq [i (range 3)]
-          (swap! game-state assoc :board highlighted)
-          (<! (timeout 170))
-          (swap! game-state assoc :board board)
-          (<! (timeout 170)))
-        
-        ; clear rows to create a gap, and pause
-        (swap! game-state assoc :board highlighted)
-        (<! (timeout 220))
-        
-        ; finally collapse
-        (swap! game-state assoc :board collapsed)))
-  (try-new-piece!))
-
 (defn try-new-piece!
   []
   (let [piece (get-rand-piece)
@@ -173,6 +155,32 @@
                  :position start-pos)
         (go-gravity!))
       (js/console.log "shit")))); game-over
+
+(defn remove-rows! []
+  (let [board (:board @game-state)
+        rows (->> board
+                  (filled-rows)
+                  (map-indexed vector)
+                  (filter #(true? (second %)))
+                  (map first))
+        collapsed   (collapse-rows rows board)
+        highlighted (highlight-rows rows board)
+        cleared     (clear-rows rows board)]
+    (go ; no need to exit this (just let it finish)
+        ; blink n times
+        (doseq [i (range 3)]
+          (swap! game-state assoc :board highlighted)
+          (<! (timeout 170))
+          (swap! game-state assoc :board board)
+          (<! (timeout 170)))
+        
+        ; clear rows to create a gap, and pause
+        (swap! game-state assoc :board cleared)
+        (<! (timeout 220))
+        
+        ; finally collapse
+        (swap! game-state assoc :board collapsed)))
+  (try-new-piece!))
 
 (defn lock-piece!
   []
@@ -209,6 +217,28 @@
 ; ::::::::::::::::::::::::::::::::::::::::::::::
 ; Om Rendering
 ; ::::::::::::::::::::::::::::::::::::::::::::::
+
+(defn tetris-board [data owner]
+  (reify
+    om/IDidMount
+    (did-mount
+      [_]
+      (let [canvas (om/get-node owner "canvas")]
+        (set! (.. canvas -width) (* cols cell-size))
+        (set! (.. canvas -height) (* rows cell-size))
+        (draw-board! canvas data)
+        ))
+    om/IDidUpdate
+    (did-update
+      [_ _ _]
+      (draw-board! (om/get-node owner "canvas") data))
+    om/IRender
+    (render
+      [_]
+      (dom/canvas #js {:ref "canvas"
+                       :style #js {:position "relative"}
+                       :onMouseDown #(go-gravity!)}
+                  nil))))
 
 (defn main []
   (om/root

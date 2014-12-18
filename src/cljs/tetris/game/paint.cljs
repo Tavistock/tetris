@@ -1,8 +1,7 @@
 (ns tetris.game.paint
   (:require [om.core :as om :include-macros true]
             [om.dom :as dom :include-macros true]
-            [tetris.game.board :as board :refer [rows cols get-drop-pos]]
-            [tetris.core :refer (go-gravity!)]))
+            [tetris.game.board :as board :refer [rows cols get-drop-pos]]))
 
 (def cell-size (quot 600 rows))
 (def dark "#449")
@@ -52,15 +51,19 @@
     [x y type]))
 
 
-(defn highlight-rows
-  [rows board]
+(defn change-rows
+  [rows board type]
   (->> board
        (map-indexed vector)
        (map
          (fn [[i x]] (if (some true? (map #(= i %) rows))
-                       (vec (repeat cols (value-piece :H)))
+                       (vec (repeat cols (value-piece type)))
                        x)))
        vec))
+
+(defn highlight-rows [rows board] (change-rows rows board :H))
+
+(defn clear-rows [rows board] (change-rows rows board 0))
 
 (defn draw-cell!
   ([ctx [x y type]] (draw-cell! ctx [x y type] default-theme))
@@ -87,25 +90,3 @@
                                                (:position state))]
             coords (unroll-board board)]
       (draw-cell! ctx coords))))
-
-(defn tetris-board [data owner]
-  (reify
-    om/IDidMount
-    (did-mount
-      [_]
-      (let [canvas (om/get-node owner "canvas")]
-        (set! (.. canvas -width) (* cols cell-size))
-        (set! (.. canvas -height) (* rows cell-size))
-        (draw-board! canvas data)
-        ))
-    om/IDidUpdate
-    (did-update
-      [_ _ _]
-      (draw-board! (om/get-node owner "canvas") data))
-    om/IRender
-    (render
-      [_]
-      (dom/canvas #js {:ref "canvas"
-                       :style #js {:position "relative"}
-                       :onMouseDown #(go-gravity!)}
-                  nil))))
