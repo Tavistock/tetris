@@ -143,6 +143,16 @@
 
 (declare go-gravity!)
 
+(defn toggle-gravity!
+  []
+  (if (:pause @game-state)
+    (do
+      (go-gravity!)
+      (swap! game-state assoc :pause false))
+    (do
+      (stop-gravity!)
+      (swap! game-state assoc :pause true))))
+
 (defn try-new-piece!
   []
   (let [piece (get-rand-piece)
